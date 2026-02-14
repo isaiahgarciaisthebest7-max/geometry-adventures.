@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geometry Dash JS: Authentic Ultimate</title>
+    <style>
+        body {
+            margin: 0; background-color: #050505;
+            display: flex; justify-content: center; align-items: center;
+            height: 100vh; font-family: 'Segoe UI', sans-serif;
+            overflow: hidden; user-select: none;
+        }
+        #game-container {
+            position: relative; width: 1280px; height: 640px;
+            box-shadow: 0 0 100px rgba(0, 150, 255, 0.15);
+            border: 4px solid #333; background-color: #000;
+        }
+        canvas { display: block; width: 100%; height: 100%; }
+
+        /* HUD */
+        #hud { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        .top-bar { display: flex; justify-content: space-between; padding: 20px 80px; align-items: center; }
+        #progress-container {
+            width: 400px; height: 12px; background: rgba(0,0,0,0.8);
+            border: 2px solid #fff; border-radius: 6px; overflow: hidden;
+        }
+        #progress-fill { width: 0%; height: 100%; background: #00ff40; box-shadow: 0 0 10px #00ff40; }
+        #attempt-display { color: white; font-weight: bold; font-size: 26px; text-shadow: 2px 2px #000; }
+        #mode-info { position: absolute; bottom: 20px; left: 20px; color: rgba(255,255,255,0.5); font-weight: bold; }
+
+        /* MENU */
+        #main-menu {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(0,0,0,0.9), rgba(0,10,30,0.9));
+            display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100;
+        }
+        .logo { color: white; font-size: 70px; text-shadow: 0 0 20px #0099ff; margin-bottom: 30px; }
+        .level-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .lvl-btn {
+            background: #151515; border: 2px solid #444; color: white; padding: 25px;
+            width: 320px; cursor: pointer; border-radius: 12px; transition: 0.2s;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .lvl-btn:hover { border-color: #00ffff; background: #1a1a1a; transform: scale(1.02); }
+
+        #crash-flash {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: white; opacity: 0; pointer-events: none; z-index: 1000;
+        }
+        .flash-active { opacity: 0.8 !important; }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="1280" height="640"></canvas>
+        <div id="crash-flash"></div>
+
+        <div id="hud" style="display: none;">
+            <div class="top-bar">
+                <div id="progress-container"><div id="progress-fill"></div></div>
+                <div id="attempt-display">ATTEMPT <span id="attempt-count">1</span></div>
+            </div>
+            <div id="mode-info">CUBE MODE</div>
+        </div>
+
+        <div id="main-menu">
+            <h1 class="logo">GEOMETRY JS</h1>
+            <div class="level-grid">
+                <div class="lvl-btn" onclick="startGame(0)"><span>STEREO MADNESS</span><span style="color:#0f0">EASY</span></div>
+                <div class="lvl-btn" onclick="startGame(3)"><span>DRY OUT</span><span style="color:#ffaa00">HARD</span></div>
+                <div class="lvl-btn" onclick="startGame(8)"><span>CYCLES</span><span style="color:#f0f">INSANE</span></div>
+                <div class="lvl-btn" onclick="startGame(16)"><span>BLAST PROCESSING</span><span style="color:#f00">HARDER</span></div>
+                <div class="lvl-btn" onclick="startGame(19)"><span>DEADLOCKED</span><span style="color:#4400ff">DEMON</span></div>
+            </div>
+        </div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // PHYSICS & CONSTANTS
+    const TICK = 1/60;
+    const PHY = {
+        G: 0.8, JUMP: -12.5, SPEED: 7.8, GROUND: 540,
+        SHIP_G: 0.35, SHIP_LIFT: -0.45,
+        WAVE_SPD: 8.5, BALL_G: 0.8
+    };
+
+    let state = { mode: "MENU", curLevel: 0, cameraX: 0, attempts: 1, objects: [], levelLen: 0, bgColor: "#0066ff" };
+    let player = { x: 300, y: 0, w: 38, h: 38, dy: 0, rot: 0, mode: "CUBE", onGround: false, dead: false, gravDir: 1 };
+    let input = { hold: false };
+    let lastTime = 0, accumulator = 0;
+
+    // INPUTS
+    const setHold = (v) => input.hold = v;
+    window.onkeydown = (e) => { if(e.code === 'Space' || e.code === 'ArrowUp') setHold(true); if(e.code === 'Escape') location.reload(); };
+    window.onkeyup = (e) => { if(e.code === 'Space' || e.code === 'ArrowUp') setHold(false); };
+    canvas.onmousedown = () => setHold(true);
+    canvas.onmouseup = () => setHold(false);
+
+    function buildLevel(id) {
+        state.objects = [];
+        let x = 800;
+        
+        const addObj = (t, ox, oy, ow=40, oh=40, m=null) => state.objects.push({t, x:ox, y:oy, w:ow, h:oh, m});
+
+        switch(id) {
+            case 0: // STEREO MADNESS: Cube + Ship basics
+                state.bgColor = "#0066ff";
+                for(let i=0; i<30; i++) {
+                    addObj('spike', x + (i*400), PHY.GROUND - 40);
+                    addObj('block', x + (i*400) + 150, PHY.GROUND - 40);
+                    if(i === 15) addObj('portal', x + (i*400), 0, 60, PHY.GROUND, 'SHIP');
+                }
+                break;
+            case 3: // DRY OUT: Gravity switching
+                state.bgColor = "#ffaa00";
+                for(let i=0; i<40; i++) {
+                    addObj('block', x + (i*300), PHY.GROUND - 40, 80, 40);
+                    if(i % 5 === 0) addObj('portal', x + (i*300) + 150, 0, 60, PHY.GROUND, 'BALL');
+                }
+                break;
+            case 8: // CYCLES: Tight Ball gameplay
+                state.bgColor = "#6600cc";
+                player.mode = "BALL";
+                for(let i=0; i<50; i++) {
+                    addObj('block', x + (i*250), PHY.GROUND - 40, 100, 40);
+                    addObj('block', x + (i*250), 0, 100, 40); // Ceiling
+                    if(i%3===0) addObj('spike', x+(i*250)+40, PHY.GROUND-80);
+                }
+                break;
+            case 16: // BLAST PROCESSING: Wave + Slopes
+                state.bgColor = "#cc0000";
+                player.mode = "WAVE";
+                for(let i=0; i<60; i++) {
+                    let gapY = 200 + Math.sin(i*0.5)*100;
+                    addObj('block', x + (i*100), 0, 100, gapY);
+                    addObj('block', x + (i*100), gapY + 200, 100, 400);
+                }
+                break;
+            case 19: // DEADLOCKED: Chaos
+                state.bgColor = "#222";
+                for(let i=0; i<100; i++) {
+                    addObj('spike', x + (i*200), (i%2==0)?PHY.GROUND-40:PHY.GROUND-120);
+                    if(i%10===0) addObj('portal', x+(i*200), 0, 60, PHY.GROUND, (i%20==0)?'WAVE':'SHIP');
+                }
+                break;
+        }
+        state.levelLen = x + 15000;
+    }
+
+    function resetPlayer(full) {
+        player.y = PHY.GROUND - player.h; player.dy = 0; player.rot = 0;
+        player.dead = false; player.onGround = true; player.gravDir = 1;
+        state.cameraX = 0;
+        if(full) state.attempts = 1; else state.attempts++;
+        document.getElementById('attempt-count').innerText = state.attempts;
+        document.getElementById('mode-info').innerText = player.mode + " MODE";
+    }
+
+    function startGame(id) {
+        state.curLevel = id;
+        state.mode = "PLAYING";
+        buildLevel(id);
+        resetPlayer(true);
+        document.getElementById('main-menu').style.display = 'none';
+        document.getElementById('hud').style.display = 'block';
+        requestAnimationFrame(gameLoop);
+    }
+
+    function updatePhysics() {
+        if(player.dead) return;
+        state.cameraX += PHY.SPEED;
+
+        // MODE BEHAVIOR
+        if(player.mode === "CUBE") {
+            player.dy += PHY.G * player.gravDir;
+            if(player.onGround && input.hold) { player.dy = PHY.JUMP * player.gravDir; player.onGround = false; }
+            if(!player.onGround) player.rot += 6 * player.gravDir;
+            else player.rot = Math.round(player.rot/90)*90;
+        } else if(player.mode === "SHIP") {
+            player.dy += input.hold ? PHY.SHIP_LIFT : PHY.SHIP_G;
+            player.rot = player.dy * 2.5;
+        } else if(player.mode === "BALL") {
+            player.dy += PHY.BALL_G * player.gravDir;
+            if(player.onGround && input.hold) { player.gravDir *= -1; player.onGround = false; input.hold = false; }
+            player.rot += 5 * player.gravDir;
+        } else if(player.mode === "WAVE") {
+            player.dy = input.hold ? -PHY.WAVE_SPD : PHY.WAVE_SPD;
+            player.rot = (player.dy > 0) ? 25 : -25;
+        }
+
+        player.y += player.dy;
+
+        // BOUNDS
+        if(player.y + player.h >= PHY.GROUND) { player.y = PHY.GROUND - player.h; player.dy = 0; player.onGround = true; }
+        else if(player.y <= 0) { player.y = 0; player.dy = 0; if(player.mode !== "BALL") player.dead = true; else player.onGround = true; }
+        else player.onGround = false;
+
+        if(player.dead) crash();
+
+        // COLLISIONS
+        const pR = { l: state.cameraX+player.x+8, r: state.cameraX+player.x+player.w-8, t: player.y+8, b: player.y+player.h-8 };
+        for(let o of state.objects) {
+            if(o.x > pR.r + 100) break;
+            if(o.x + o.w < pR.l) continue;
+
+            if(pR.r > o.x && pR.l < o.x+o.w && pR.b > o.y && pR.t < o.y+o.h) {
+                if(o.t === 'spike') crash();
+                if(o.t === 'block') {
+                    if(player.y - player.dy + player.h <= o.y + 10) { player.y = o.y - player.h; player.dy = 0; player.onGround = true; }
+                    else if(player.y - player.dy >= o.y + o.h - 10) { player.y = o.y + o.h; player.dy = 0; player.onGround = true; }
+                    else crash();
+                }
+                if(o.t === 'portal') { player.mode = o.m; document.getElementById('mode-info').innerText = player.mode + " MODE"; }
+            }
+        }
+
+        if(state.cameraX > state.levelLen) location.reload();
+    }
+
+    function crash() {
+        if(player.dead && state.mode !== "PLAYING") return;
+        player.dead = true;
+        document.getElementById('crash-flash').classList.add('flash-active');
+        setTimeout(() => {
+            document.getElementById('crash-flash').classList.remove('flash-active');
+            resetPlayer(false);
+        }, 400);
+    }
+
+    function draw() {
+        ctx.fillStyle = state.bgColor; ctx.fillRect(0,0,1280,640);
+        ctx.fillStyle = "#000"; ctx.fillRect(0, PHY.GROUND, 1280, 100);
+        ctx.strokeStyle = "#fff"; ctx.strokeRect(-1, PHY.GROUND, 1282, 2);
+
+        ctx.save(); ctx.translate(-state.cameraX, 0);
+        for(let o of state.objects) {
+            if(o.x < state.cameraX - 100 || o.x > state.cameraX + 1300) continue;
+            if(o.t === 'block') { ctx.fillStyle = "#000"; ctx.fillRect(o.x, o.y, o.w, o.h); ctx.strokeStyle = "#fff"; ctx.strokeRect(o.x, o.y, o.w, o.h); }
+            else if(o.t === 'spike') { ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.moveTo(o.x, o.y+40); ctx.lineTo(o.x+20, o.y); ctx.lineTo(o.x+40, o.y+40); ctx.fill(); }
+            else if(o.t === 'portal') { ctx.fillStyle = "rgba(255,255,255,0.2)"; ctx.fillRect(o.x, 0, o.w, PHY.GROUND); }
+        }
+
+        if(!player.dead) {
+            ctx.save(); ctx.translate(state.cameraX+player.x+19, player.y+19); ctx.rotate(player.rot*Math.PI/180);
+            ctx.fillStyle = "#00ffff"; ctx.fillRect(-19,-19,38,38); ctx.strokeStyle="#fff"; ctx.lineWidth=2; ctx.strokeRect(-19,-19,38,38);
+            ctx.restore();
+        }
+        ctx.restore();
+
+        document.getElementById('progress-fill').style.width = (state.cameraX / state.levelLen * 100) + "%";
+    }
+
+    function gameLoop(t) {
+        if(state.mode !== "PLAYING") return;
+        accumulator += (t - lastTime) / 1000; lastTime = t;
+        while(accumulator >= TICK) { updatePhysics(); accumulator -= TICK; }
+        draw(); requestAnimationFrame(gameLoop);
+    }
+</script>
+</body>
+</html>
